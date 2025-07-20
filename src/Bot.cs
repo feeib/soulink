@@ -1,7 +1,86 @@
-﻿public sealed class Bot
+using Telegram.Bot;
+using Telegram.Bot.Polling;
+using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
+
+public static class Bot
 {
-	private static void Main()
+	public static TelegramBotClient? TelegramBot { get; private set; }
+	private static User? _user;
+
+	public static Dictionary<long, UserState>? Users { get; private set; }
+
+	public static async Task Run()
 	{
-		Console.WriteLine("Hi, soulink!");
+		using CancellationTokenSource cts = new CancellationTokenSource();
+
+		TelegramBot = new TelegramBotClient(Environment.GetEnvironmentVariable("BOT_TOKEN")!, cancellationToken: cts.Token);
+		TelegramBot.OnUpdate += OnUpdate;
+		TelegramBot.OnMessage += OnMessage;
+		TelegramBot.OnError += OnError;
+
+		Users = new Dictionary<long, UserState>();
+
+		_user = await TelegramBot.GetMe();
+
+		Console.WriteLine($"[id: {_user.Id}, name: {_user.FirstName}] bot is running... ");
+
+		Console.ReadLine();
+		cts.Cancel();
+	}
+
+	private static async Task OnUpdate(Update update)
+	{
+		if (update is { CallbackQuery: { } query })
+		{
+			await TelegramBot!.AnswerCallbackQuery(query.Id, $"You picked: {query.Data}");
+			await TelegramBot!.SendMessage(query.Message!.Chat, $"User {query.From} clicked on {query.Data}");
+		}
+	}
+
+	private static async Task OnMessage(Message msg, UpdateType updateType)
+	{
+		if (msg.Text is not null)
+		{
+			if (msg.Text.Equals("/start"))
+			{
+				if (!await Database.IsUserExist(msg.Chat.Id))
+				{
+					await CreateSoul(msg, new EditProfile());
+				}
+			}
+			else if (msg.Text.Equals("/profile"))
+			{
+				if (await Database.IsUserExist(msg.Chat.Id))
+				{
+					await CreateSoul(msg, new ShowProfile());
+				}
+			}
+			if (Users!.ContainsKey(msg.Chat.Id))
+			{
+				Users![msg.Chat.Id]?.OnText(msg.Text);
+			}
+		}
+		else if (msg.Photo is not null)
+		{
+			if (Users!.ContainsKey(msg.Chat.Id))
+			{
+				Users![msg.Chat.Id]?.OnPhoto(msg.Photo);
+			}
+		}
+
+		Console.WriteLine(Users!.Count);
+	}
+
+	private static async Task OnError(Exception exception, HandleErrorSource source)
+	{
+		Console.WriteLine($"OnError: {exception}");
+	}
+
+	private static async Task CreateSoul(Message msg, UserState state)
+	{
+		Users!.Add(msg.Chat.Id, state);
+		await state.Create(msg);
 	}
 }
