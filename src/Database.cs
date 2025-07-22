@@ -40,13 +40,20 @@ public static class Database
 		else return false;
 	}
 
-	public static async Task AddUserIfNotExists((long chatId, string name, string age, string description, string photoId) user)
+	public static async Task AddOrUpdateUser((long chatId, string name, string age, string description, string photoId) user)
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
 		connection.Open();
 
 		SqliteCommand command = connection.CreateCommand();
-		command.CommandText = $"INSERT OR IGNORE INTO {USERS_TABLE} (ChatId, Name, Age, Description, PhotoId) VALUES($chatId, $name, $age, $description, $photoId);";
+		command.CommandText = $@"INSERT INTO {USERS_TABLE} (ChatId, Name, Age, Description, PhotoId)
+			VALUES($chatId, $name, $age, $description, $photoId)
+			ON CONFLICT(ChatId) DO UPDATE SET
+				Name = excluded.Name,
+				Age = excluded.Age,
+				Description = excluded.Description,
+				PhotoId = excluded.PhotoId;
+		;";
 
 		command.Parameters.AddWithValue("$chatId", user.chatId);
 		command.Parameters.AddWithValue("$name", user.name);

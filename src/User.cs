@@ -40,25 +40,24 @@ public class UserState
 		}
 	}
 #pragma warning restore CS1998
-
 }
 
 public sealed class EditProfile : UserState
 {
-	private FormManager _formManager = null!;
+	public FormManager FormManager { get; private set; } = null!;
 
 	public override async Task Create(Message msg)
 	{
 		await base.Create(msg);
 
-		_formManager = new FormManager([new NameStep(), new AgeStep(), new DescriptionStep(), new PhotoStep()]);
+		FormManager = new FormManager([new NameStep(), new AgeStep(), new DescriptionStep(), new PhotoStep()]);
 	}
 
 	public override async Task OnText(string text)
 	{
 		await base.OnText(text);
 
-		if (await _formManager.ProcessInput(ChatId, text))
+		if (await FormManager.ProcessInput(ChatId, text))
 		{
 			await Remove();
 		}
@@ -68,7 +67,7 @@ public sealed class EditProfile : UserState
 	{
 		await base.OnPhoto(photo);
 
-		if (await _formManager.ProcessInput(ChatId, photo))
+		if (await FormManager.ProcessInput(ChatId, photo))
 		{
 			await Remove();
 		}
@@ -78,12 +77,12 @@ public sealed class EditProfile : UserState
 	{
 		await base.Remove();
 
-		string name = _formManager.FormContext.Get<string>("name");
-		string age = _formManager.FormContext.Get<string>("age");
-		string description = _formManager.FormContext.Get<string>("description");
-		string photoId = _formManager.FormContext.Get<string>("photoId");
+		string name = FormManager.FormContext.Get<string>("name");
+		string age = FormManager.FormContext.Get<string>("age");
+		string description = FormManager.FormContext.Get<string>("description");
+		string photoId = FormManager.FormContext.Get<string>("photoId");
 
-		await Database.AddUserIfNotExists((ChatId, name, age, description, photoId));
+		await Database.AddOrUpdateUser((ChatId, name, age, description, photoId));
 	}
 }
 
@@ -95,8 +94,27 @@ public sealed class ShowProfile : UserState
 
 		(string? name, string? age, string? description, string? photoId) user = await Database.GetUser(msg.Chat.Id);
 
-		await Bot.TelegramBot!.SendPhoto(msg.Chat.Id, user.photoId!, $"{user.name}, {user.age}, {user.description}");
-		await Remove();
+		await Bot.TelegramBot!.SendPhoto(msg.Chat.Id, user.photoId!, $"{user.name}, {user.age}, {user.description}", replyMarkup: new InlineKeyboardButton[] { "Edit", "Back" });
+	}
+
+	public override async Task OnUpdate(CallbackQuery query)
+	{
+		if (query.Data is null || query.Message is null) return;
+
+		if (query.Data.Equals("Edit"))
+		{
+			await base.Remove();
+			await Bot.CreateSoul(query.Message, new EditProfile(), async (state) =>
+			{
+				await state.Create(query.Message);
+				await ((EditProfile)state).FormManager.Start(query.Message.Chat.Id);
+			});
+		}
+		else if (query.Data.Equals("Back"))
+		{
+			await base.Remove();
+		}
+
 	}
 
 	public override async Task Remove()
@@ -105,7 +123,7 @@ public sealed class ShowProfile : UserState
 	}
 }
 
-public sealed class WatchProfile : UserState
+public sealed class ViewProfile : UserState
 {
 	private Dictionary<int, long> _savedSouls = new Dictionary<int, long>(); //message id, user db id
 

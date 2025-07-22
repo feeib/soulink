@@ -39,15 +39,16 @@ public class FormManager
 		FormContext = new FormContext();
 	}
 
+	public async Task Start(long chatId)
+	{
+		_start = true;
+
+		await Bot.TelegramBot!.SendMessage(chatId, CurrentStep!.Question);
+	}
+
 	public async Task<bool> ProcessInput(long chatId, object input)
 	{
-		if (!_start)
-		{
-			_start = true;
-
-			await Bot.TelegramBot!.SendMessage(chatId, CurrentStep!.Question);
-			return false;
-		}
+		if (!_start) return false;
 
 		if (CurrentStep!.Validate(input, out string? error))
 		{

@@ -1,3 +1,4 @@
+using System;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
@@ -49,24 +50,34 @@ public static class Bot
 			{
 				if (!await Database.IsUserExist(msg.Chat.Id))
 				{
-					await CreateSoul(msg, new EditProfile());
+					await CreateSoul(msg, new EditProfile(), async (state) =>
+					{
+						await state.Create(msg);
+						await ((EditProfile)state).FormManager.Start(msg.Chat.Id);
+					});
 				}
 			}
 			else if (msg.Text.Equals("/profile"))
 			{
 				if (await Database.IsUserExist(msg.Chat.Id))
 				{
-					await CreateSoul(msg, new ShowProfile());
+					await CreateSoul(msg, new ShowProfile(), async (state) =>
+					{
+						await state.Create(msg);
+					});
 				}
 			}
 			else if (msg.Text.Equals("/find"))
 			{
 				if (await Database.IsUserExist(msg.Chat.Id))
 				{
-					await CreateSoul(msg, new WatchProfile());
+					await CreateSoul(msg, new ViewProfile(), async (state) =>
+					{
+						await state.Create(msg);
+					});
 				}
 			}
-			if (Users!.ContainsKey(msg.Chat.Id))
+			else if (Users!.ContainsKey(msg.Chat.Id))
 			{
 				Users![msg.Chat.Id]?.OnText(msg.Text);
 			}
@@ -87,9 +98,9 @@ public static class Bot
 	}
 #pragma warning restore 1998
 
-	private static async Task CreateSoul(Message msg, UserState state)
+	public static async Task CreateSoul(Message msg, UserState state, Func<UserState, Task> callback)
 	{
 		Users!.Add(msg.Chat.Id, state);
-		await state.Create(msg);
+		await callback.Invoke(state);
 	}
 }
