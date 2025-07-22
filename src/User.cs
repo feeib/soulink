@@ -8,10 +8,16 @@ public class UserState
 {
 	public long ChatId;
 
+#pragma warning disable CS1998
 	public virtual async Task Create(Message msg)
 	{
 		Console.WriteLine($"Create: {GetType()}");
 		ChatId = msg.Chat.Id;
+	}
+
+	public virtual async Task OnUpdate(CallbackQuery query)
+	{
+		Console.WriteLine($"OnUpdate: {GetType()}");
 	}
 
 	public virtual async Task OnText(string text)
@@ -33,11 +39,13 @@ public class UserState
 			Bot.Users!.Remove(ChatId);
 		}
 	}
+#pragma warning restore CS1998
+
 }
 
 public sealed class EditProfile : UserState
 {
-	private FormManager _formManager;
+	private FormManager _formManager = null!;
 
 	public override async Task Create(Message msg)
 	{
@@ -70,10 +78,10 @@ public sealed class EditProfile : UserState
 	{
 		await base.Remove();
 
-		string name = _formManager.FormContext.Get("name").ToString();
-		string age = _formManager.FormContext.Get("age").ToString();
-		string description = _formManager.FormContext.Get("description").ToString();
-		string photoId = _formManager.FormContext.Get("photoId").ToString();
+		string name = _formManager.FormContext.Get<string>("name");
+		string age = _formManager.FormContext.Get<string>("age");
+		string description = _formManager.FormContext.Get<string>("description");
+		string photoId = _formManager.FormContext.Get<string>("photoId");
 
 		await Database.AddUserIfNotExists((ChatId, name, age, description, photoId));
 	}
@@ -94,5 +102,59 @@ public sealed class ShowProfile : UserState
 	public override async Task Remove()
 	{
 		await base.Remove();
+	}
+}
+
+public sealed class WatchProfile : UserState
+{
+	private Dictionary<int, long> _savedSouls = new Dictionary<int, long>(); //message id, user db id
+
+	private long _lastUserId = -1;
+
+	public override async Task Create(Message msg)
+	{
+		await base.Create(msg);
+
+		Show();
+	}
+
+	public override async Task OnUpdate(CallbackQuery query)
+	{
+		await base.OnUpdate(query);
+
+		if (query.Message is null || query.Data is null) return;
+
+		if (!_savedSouls.ContainsKey(query.Message.Id))
+		{
+			await Bot.TelegramBot!.AnswerCallbackQuery(query.Id, "Та анкета вигасла.");
+			return;
+		}
+
+		if (query.Data.Equals("Next"))
+		{
+			Show();
+		}
+		else if (query.Data.Equals("Like"))
+		{
+			await Bot.TelegramBot!.AnswerCallbackQuery(query.Id, $"Ти тицьнув вподобайку {_savedSouls[query.Message.Id]}.");
+		}
+		else if (query.Data.Equals("Stop"))
+		{
+			await base.Remove();
+		}
+	}
+
+	private async void Show()
+	{
+		(string? id, string? name, string? age, string? description, string? photoId) user = await Database.GetUserByOrderAsc(_lastUserId);
+
+		if (user.id is not null)
+		{
+			_lastUserId = long.Parse(user.id);
+
+			Message msg = await Bot.TelegramBot!.SendPhoto(ChatId, user.photoId!, $"id:{user.id}, {user.name}, {user.age}, {user.description}", replyMarkup: new InlineKeyboardButton[] { "Next", "Like", "Stop" });
+
+			_savedSouls.Add(msg.Id, _lastUserId);
+		}
 	}
 }

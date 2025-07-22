@@ -14,7 +14,13 @@ public class FormContext
 	public Dictionary<string, object> Answers { get; } = new();
 
 	public void Set(string key, object obj) => Answers[key] = obj;
-	public object? Get(string key) => Answers.TryGetValue(key, out object? value) ? value : null;
+	public T Get<T>(string key)
+	{
+		if (Answers.TryGetValue(key, out var value) && value is T typed)
+			return typed;
+
+		throw new InvalidOperationException($"No value assigned to key '{key}'");
+	}
 }
 
 public class FormManager
@@ -127,7 +133,7 @@ public class DescriptionStep : FormStep
 
 	public override void SaveAnswer(FormContext context, object obj)
 	{
-		context.Set("description", obj.ToString().Trim());
+		context.Set("description", ((string)obj).Trim());
 	}
 }
 

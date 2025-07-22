@@ -6,10 +6,10 @@ using Telegram.Bot.Types.ReplyMarkups;
 
 public static class Bot
 {
-	public static TelegramBotClient? TelegramBot { get; private set; }
-	private static User? _user;
+	public static TelegramBotClient? TelegramBot { get; private set; } = null!;
+	private static User _user = null!;
 
-	public static Dictionary<long, UserState>? Users { get; private set; }
+	public static Dictionary<long, UserState>? Users { get; private set; } = null!;
 
 	public static async Task Run()
 	{
@@ -34,8 +34,10 @@ public static class Bot
 	{
 		if (update is { CallbackQuery: { } query })
 		{
-			await TelegramBot!.AnswerCallbackQuery(query.Id, $"You picked: {query.Data}");
-			await TelegramBot!.SendMessage(query.Message!.Chat, $"User {query.From} clicked on {query.Data}");
+			if (Users!.ContainsKey(query.Message!.Chat.Id))
+			{
+				await Users[query.Message!.Chat.Id].OnUpdate(query);
+			}
 		}
 	}
 
@@ -57,6 +59,13 @@ public static class Bot
 					await CreateSoul(msg, new ShowProfile());
 				}
 			}
+			else if (msg.Text.Equals("/find"))
+			{
+				if (await Database.IsUserExist(msg.Chat.Id))
+				{
+					await CreateSoul(msg, new WatchProfile());
+				}
+			}
 			if (Users!.ContainsKey(msg.Chat.Id))
 			{
 				Users![msg.Chat.Id]?.OnText(msg.Text);
@@ -69,14 +78,14 @@ public static class Bot
 				Users![msg.Chat.Id]?.OnPhoto(msg.Photo);
 			}
 		}
-
-		Console.WriteLine(Users!.Count);
 	}
 
+#pragma warning disable 1998
 	private static async Task OnError(Exception exception, HandleErrorSource source)
 	{
 		Console.WriteLine($"OnError: {exception}");
 	}
+#pragma warning restore 1998
 
 	private static async Task CreateSoul(Message msg, UserState state)
 	{
