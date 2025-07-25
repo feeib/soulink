@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 public static class Database
 {
 	private const string USERS_TABLE = "Souls";
+	private const string USER_LIKES_TABLE = "Likes";
 
 	public static async Task Run()
 	{
@@ -18,6 +19,17 @@ public static class Database
 				Age INT,
 				Description TEXT,
 				PhotoId TEXT
+			);
+		";
+
+		SqliteCommand command1 = connection.CreateCommand();
+		command.CommandText = $@"
+			CREATE TABLE IF NOT EXISTS {USER_LIKES_TABLE} (
+				Id INTEGER PRIMARY KEY AUTOINCREMENT,
+				ChatId INTEGER NOT NULL,
+				SoulChatId INTEGER NOT NULL,
+
+				UNIQUE(ChatId, SoulChatId)
 			);
 		";
 
@@ -64,7 +76,7 @@ public static class Database
 		await command.ExecuteNonQueryAsync();
 	}
 
-	public static async Task<(string? name, string? age, string? description, string? photoId)> GetUser(long chatId)
+	public static async Task<(string name, string age, string description, string photoId)?> GetUserByChatId(long chatId)
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
 		connection.Open();
@@ -87,24 +99,25 @@ public static class Database
 			return user;
 		}
 
-		return (null, null, null, null);
+		return null;
 	}
 
-	public static async Task<(string? id, string? name, string? age, string? description, string? photoId)> GetUserByOrderAsc(long id)
+	public static async Task<(string id, string chatId, string name, string age, string description, string photoId)?> GetUserByOrderAsc(long id)
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
 		connection.Open();
 
 		SqliteCommand command = connection.CreateCommand();
-		command.CommandText = $"SELECT Id, Name, Age, Description, PhotoId FROM {USERS_TABLE} WHERE Id > $id ORDER BY Id ASC LIMIT 1;";
+		command.CommandText = $"SELECT Id, ChatId, Name, Age, Description, PhotoId FROM {USERS_TABLE} WHERE Id > $id ORDER BY Id ASC LIMIT 1;";
 		command.Parameters.AddWithValue("$id", id);
 
 		using SqliteDataReader reader = await command.ExecuteReaderAsync();
 
 		if (reader.Read())
 		{
-			(string id, string name, string age, string description, string photoId) user;
+			(string id, string chatId, string name, string age, string description, string photoId) user;
 			user.id = reader["Id"].ToString()!;
+			user.chatId = reader["ChatId"].ToString()!;
 			user.name = reader["Name"].ToString()!;
 			user.age = reader["Age"].ToString()!;
 			user.description = reader["Description"].ToString()!;
@@ -113,6 +126,55 @@ public static class Database
 			return user;
 		}
 
-		return (null, null, null, null, null);
+		return null;
+	}
+
+	public static async Task<(string id, string chatId)?> GetLike(long targetChatId)
+	{
+		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
+		connection.Open();
+
+		SqliteCommand command = connection.CreateCommand();
+		command.CommandText = $"SELECT Id, ChatId FROM {USER_LIKES_TABLE} WHERE SoulChatId = $chatId LIMIT 1;";
+		command.Parameters.AddWithValue("$chatId", targetChatId);
+
+		using SqliteDataReader reader = await command.ExecuteReaderAsync();
+
+		if (reader.Read())
+		{
+			(string id, string chatId) like;
+			like.id = reader["Id"].ToString()!;
+			like.chatId = reader["ChatId"].ToString()!;
+
+			return like;
+		}
+
+		return null;
+
+	}
+
+	public static async Task AddLike(long chatId, long targetChatId)
+	{
+		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
+		connection.Open();
+
+		SqliteCommand command = connection.CreateCommand();
+		command.CommandText = $"INSERT OR IGNORE INTO {USER_LIKES_TABLE} (ChatId, SoulChatId) VALUES ($chatId, $soulChatId);";
+		command.Parameters.AddWithValue("$chatId", chatId);
+		command.Parameters.AddWithValue("$soulChatId", targetChatId);
+
+		await command.ExecuteNonQueryAsync();
+	}
+
+	public static async Task RemoveLike(long id)
+	{
+		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
+		connection.Open();
+
+		SqliteCommand command = connection.CreateCommand();
+		command.CommandText = $"DELETE FROM {USER_LIKES_TABLE} WHERE Id = $id;";
+		command.Parameters.AddWithValue("$id", id);
+
+		await command.ExecuteNonQueryAsync();
 	}
 }

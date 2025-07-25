@@ -1,42 +1,47 @@
 using Telegram.Bot;
-using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
-using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
 public class UserState
 {
-	public long ChatId;
+	public long ChatId { get; private set; }
+	public DateTime LastActive { get; private set; }
 
 #pragma warning disable CS1998
 	public virtual async Task Create(Message msg)
 	{
 		Console.WriteLine($"Create: {GetType()}");
 		ChatId = msg.Chat.Id;
+		LastActive = DateTime.UtcNow;
 	}
 
 	public virtual async Task OnUpdate(CallbackQuery query)
 	{
 		Console.WriteLine($"OnUpdate: {GetType()}");
+		LastActive = DateTime.UtcNow;
 	}
 
 	public virtual async Task OnText(string text)
 	{
 		Console.WriteLine($"OnText: {GetType()}");
+		LastActive = DateTime.UtcNow;
 	}
 
 	public virtual async Task OnPhoto(PhotoSize[] photo)
 	{
 		Console.WriteLine($"OnPhoto: {GetType()}");
+		LastActive = DateTime.UtcNow;
 	}
 
 	public virtual async Task Remove()
 	{
-		Console.WriteLine($"Remove: {GetType()}");
-
-		if (Bot.Users!.ContainsKey(ChatId))
+		if (Bot.Users!.TryRemove(ChatId, out _))
 		{
-			Bot.Users!.Remove(ChatId);
+			Console.WriteLine($"Remove: {GetType()}");
+		}
+		else
+		{
+			Console.WriteLine($"No remove: {GetType()}");
 		}
 	}
 #pragma warning restore CS1998
@@ -50,7 +55,15 @@ public sealed class EditProfile : UserState
 	{
 		await base.Create(msg);
 
+		if (string.IsNullOrWhiteSpace(msg.Chat.Username))
+		{
+			await Bot.TelegramBot!.SendMessage(msg.Chat.Id, $"Встанови username на початок...");
+			await Remove();
+			return;
+		}
+
 		FormManager = new FormManager([new NameStep(), new AgeStep(), new DescriptionStep(), new PhotoStep()]);
+		await FormManager.Start(msg.Chat.Id);
 	}
 
 	public override async Task OnText(string text)
@@ -77,6 +90,8 @@ public sealed class EditProfile : UserState
 	{
 		await base.Remove();
 
+		if (FormManager is null) return;
+
 		string name = FormManager.FormContext.Get<string>("name");
 		string age = FormManager.FormContext.Get<string>("age");
 		string description = FormManager.FormContext.Get<string>("description");
@@ -92,29 +107,22 @@ public sealed class ShowProfile : UserState
 	{
 		await base.Create(msg);
 
-		(string? name, string? age, string? description, string? photoId) user = await Database.GetUser(msg.Chat.Id);
+		(string name, string age, string description, string photoId)? user = await Database.GetUserByChatId(msg.Chat.Id);
 
-		await Bot.TelegramBot!.SendPhoto(msg.Chat.Id, user.photoId!, $"{user.name}, {user.age}, {user.description}", replyMarkup: new InlineKeyboardButton[] { "Edit", "Back" });
+		if (user.HasValue)
+		{
+			await Bot.TelegramBot!.SendPhoto(msg.Chat.Id, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "📝" });
+		}
 	}
 
 	public override async Task OnUpdate(CallbackQuery query)
 	{
 		if (query.Data is null || query.Message is null) return;
 
-		if (query.Data.Equals("Edit"))
+		if (query.Data.Equals("📝"))
 		{
-			await base.Remove();
-			await Bot.CreateSoul(query.Message, new EditProfile(), async (state) =>
-			{
-				await state.Create(query.Message);
-				await ((EditProfile)state).FormManager.Start(query.Message.Chat.Id);
-			});
+			await Bot.ChangeState(query.Message, new EditProfile());
 		}
-		else if (query.Data.Equals("Back"))
-		{
-			await base.Remove();
-		}
-
 	}
 
 	public override async Task Remove()
@@ -148,31 +156,85 @@ public sealed class ViewProfile : UserState
 			return;
 		}
 
-		if (query.Data.Equals("Next"))
+		if (query.Data.Equals("➡️"))
 		{
 			Show();
 		}
-		else if (query.Data.Equals("Like"))
+		else if (query.Data.Equals("👍"))
 		{
-			await Bot.TelegramBot!.AnswerCallbackQuery(query.Id, $"Ти тицьнув вподобайку {_savedSouls[query.Message.Id]}.");
-		}
-		else if (query.Data.Equals("Stop"))
-		{
-			await base.Remove();
+			await Database.AddLike(query.Message.Chat.Id, _savedSouls[query.Message.Id]);
+			await Bot.TelegramBot!.SendMessage(_savedSouls[query.Message.Id], "Ти дістав вподобайку!", replyMarkup: new InlineKeyboardButton[] { "📤" });
 		}
 	}
 
 	private async void Show()
 	{
-		(string? id, string? name, string? age, string? description, string? photoId) user = await Database.GetUserByOrderAsc(_lastUserId);
+		(string id, string chatId, string name, string age, string description, string photoId)? user = await Database.GetUserByOrderAsc(_lastUserId);
 
-		if (user.id is not null)
+		if (user.HasValue)
 		{
-			_lastUserId = long.Parse(user.id);
+			_lastUserId = long.Parse(user.Value.id);
 
-			Message msg = await Bot.TelegramBot!.SendPhoto(ChatId, user.photoId!, $"id:{user.id}, {user.name}, {user.age}, {user.description}", replyMarkup: new InlineKeyboardButton[] { "Next", "Like", "Stop" });
+			Message msg = await Bot.TelegramBot!.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "➡️", "👍" });
 
-			_savedSouls.Add(msg.Id, _lastUserId);
+			_savedSouls.Add(msg.Id, long.Parse(user.Value.chatId));
+		}
+	}
+}
+
+public sealed class ViewLikedProfile : UserState
+{
+	private long _lastLikeId;
+	private long _lastChatId;
+
+	public override async Task Create(Message msg)
+	{
+		await base.Create(msg);
+
+		await ShowNext();
+	}
+
+	public override async Task OnUpdate(CallbackQuery query)
+	{
+		await base.OnUpdate(query);
+
+		if (query.Message is null || query.Data is null) return;
+
+		if (query.Data.Equals("👎"))
+		{
+			await Database.RemoveLike(_lastLikeId);
+			await ShowNext();
+		}
+		else if (query.Data.Equals("👍"))
+		{
+			ChatFullInfo chat = await Bot.TelegramBot!.GetChat(_lastChatId);
+
+			await Bot.TelegramBot!.SendMessage(ChatId, $"Пиши: @{chat.Username} Удачі!");
+			await Database.RemoveLike(_lastLikeId);
+			await Remove();
+		}
+	}
+
+	private async Task ShowNext()
+	{
+		(string id, string chatId)? like = await Database.GetLike(ChatId);
+
+		if (like.HasValue)
+		{
+			_lastLikeId = long.Parse(like.Value.id);
+			_lastChatId = long.Parse(like.Value.chatId);
+
+			(string name, string age, string description, string photoId)? user = await Database.GetUserByChatId(long.Parse(like.Value.chatId));
+
+			if (user.HasValue)
+			{
+				await Bot.TelegramBot!.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "\U0001F44E", "\U0001F44D" });
+			}
+		}
+		else
+		{
+			await Bot.TelegramBot!.SendMessage(ChatId, "Пусто тут, більше нічого немає");
+			await Remove();
 		}
 	}
 }

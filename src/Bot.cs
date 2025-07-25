@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
@@ -10,7 +11,9 @@ public static class Bot
 	public static TelegramBotClient? TelegramBot { get; private set; } = null!;
 	private static User _user = null!;
 
-	public static Dictionary<long, UserState>? Users { get; private set; } = null!;
+	public static ConcurrentDictionary<long, UserState>? Users { get; private set; } = null!;
+
+	private const int CLEANUP_USERS_TIME = 1;
 
 	public static async Task Run()
 	{
@@ -21,11 +24,40 @@ public static class Bot
 		TelegramBot.OnMessage += OnMessage;
 		TelegramBot.OnError += OnError;
 
-		Users = new Dictionary<long, UserState>();
+		await TelegramBot.SetMyCommands(new[]{
+			new BotCommand { Command = "find", Description = "🔍шукай свого" },
+			new BotCommand { Command = "profile", Description = "👤твоя \"крінжова\" анкета" },
+			new BotCommand { Command = "check", Description = "👀глянути вподобайки" },
+		});
+
+		Users = new ConcurrentDictionary<long, UserState>();
 
 		_user = await TelegramBot.GetMe();
 
 		Console.WriteLine($"[id: {_user.Id}, name: {_user.FirstName}] bot is running... ");
+
+		_ = Task.Run(async () =>
+		{
+			while (true)
+			{
+				await Task.Delay(TimeSpan.FromMinutes(CLEANUP_USERS_TIME));
+
+				DateTime now = DateTime.UtcNow;
+				int removedCount = 0;
+				int usersCount = Users.Count;
+
+				foreach (KeyValuePair<long, UserState> pair in Users)
+				{
+					if ((now - pair.Value.LastActive).TotalMinutes > CLEANUP_USERS_TIME)
+					{
+						await pair.Value.Remove();
+						removedCount++;
+					}
+				}
+
+				Console.WriteLine($"Removed {removedCount} users of {usersCount}");
+			}
+		});
 
 		Console.ReadLine();
 		cts.Cancel();
@@ -35,7 +67,11 @@ public static class Bot
 	{
 		if (update is { CallbackQuery: { } query })
 		{
-			if (Users!.ContainsKey(query.Message!.Chat.Id))
+			if (query.Data is not null && query.Message is not null && query.Data.Equals("📤"))
+			{
+				await ChangeState(query.Message, new ViewLikedProfile());
+			}
+			else if (Users!.ContainsKey(query.Message!.Chat.Id))
 			{
 				await Users[query.Message!.Chat.Id].OnUpdate(query);
 			}
@@ -50,31 +86,28 @@ public static class Bot
 			{
 				if (!await Database.IsUserExist(msg.Chat.Id))
 				{
-					await CreateSoul(msg, new EditProfile(), async (state) =>
-					{
-						await state.Create(msg);
-						await ((EditProfile)state).FormManager.Start(msg.Chat.Id);
-					});
+					await ChangeState(msg, new EditProfile());
 				}
 			}
 			else if (msg.Text.Equals("/profile"))
 			{
 				if (await Database.IsUserExist(msg.Chat.Id))
 				{
-					await CreateSoul(msg, new ShowProfile(), async (state) =>
-					{
-						await state.Create(msg);
-					});
+					await ChangeState(msg, new ShowProfile());
 				}
 			}
 			else if (msg.Text.Equals("/find"))
 			{
 				if (await Database.IsUserExist(msg.Chat.Id))
 				{
-					await CreateSoul(msg, new ViewProfile(), async (state) =>
-					{
-						await state.Create(msg);
-					});
+					await ChangeState(msg, new ViewProfile());
+				}
+			}
+			else if (msg.Text.Equals("/check"))
+			{
+				if (await Database.IsUserExist(msg.Chat.Id))
+				{
+					await ChangeState(msg, new ViewLikedProfile());
 				}
 			}
 			else if (Users!.ContainsKey(msg.Chat.Id))
@@ -98,9 +131,20 @@ public static class Bot
 	}
 #pragma warning restore 1998
 
-	public static async Task CreateSoul(Message msg, UserState state, Func<UserState, Task> callback)
+	private static async Task CreateState(Message msg, UserState state)
 	{
-		Users!.Add(msg.Chat.Id, state);
-		await callback.Invoke(state);
+		if (Users!.TryAdd(msg.Chat.Id, state))
+		{
+			await state.Create(msg);
+		}
+	}
+
+	public static async Task ChangeState(Message msg, UserState newState)
+	{
+		if (Users!.ContainsKey(msg.Chat.Id))
+		{
+			await Users![msg.Chat.Id].Remove();
+		}
+		await CreateState(msg, newState);
 	}
 }
