@@ -8,7 +8,7 @@ public static class Database
 	public static async Task Run()
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
-		connection.Open();
+		await connection.OpenAsync();
 
 		SqliteCommand command = connection.CreateCommand();
 		command.CommandText = $@"
@@ -18,9 +18,11 @@ public static class Database
 				Name VARCHAR(16),
 				Age INT,
 				Description TEXT,
-				PhotoId TEXT
+				PhotoId TEXT,
+				Category INT
 			);
 		";
+		await command.ExecuteNonQueryAsync();
 
 		SqliteCommand command1 = connection.CreateCommand();
 		command.CommandText = $@"
@@ -33,13 +35,13 @@ public static class Database
 			);
 		";
 
-		await command.ExecuteNonQueryAsync();
+		await command1.ExecuteNonQueryAsync();
 	}
 
 	public static async Task<bool> IsUserExist(long chatId)
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
-		connection.Open();
+		await connection.OpenAsync();
 
 		SqliteCommand command = connection.CreateCommand();
 		command.CommandText = $"SELECT COUNT(*) FROM {USERS_TABLE} WHERE ChatId = $chatId LIMIT 1;";
@@ -55,7 +57,7 @@ public static class Database
 	public static async Task AddOrUpdateUser((long chatId, string name, string age, string description, string photoId) user)
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
-		connection.Open();
+		await connection.OpenAsync();
 
 		SqliteCommand command = connection.CreateCommand();
 		command.CommandText = $@"INSERT INTO {USERS_TABLE} (ChatId, Name, Age, Description, PhotoId)
@@ -79,7 +81,7 @@ public static class Database
 	public static async Task<(string name, string age, string description, string photoId)?> GetUserByChatId(long chatId)
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
-		connection.Open();
+		await connection.OpenAsync();
 
 		SqliteCommand command = connection.CreateCommand();
 		command.CommandText = $"SELECT Name, Age, Description, PhotoId FROM {USERS_TABLE} WHERE ChatId = $chatId;";
@@ -105,7 +107,7 @@ public static class Database
 	public static async Task<(string id, string chatId, string name, string age, string description, string photoId)?> GetUserByOrderAsc(long id)
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
-		connection.Open();
+		await connection.OpenAsync();
 
 		SqliteCommand command = connection.CreateCommand();
 		command.CommandText = $"SELECT Id, ChatId, Name, Age, Description, PhotoId FROM {USERS_TABLE} WHERE Id > $id ORDER BY Id ASC LIMIT 1;";
@@ -132,7 +134,7 @@ public static class Database
 	public static async Task<(string id, string chatId)?> GetLike(long targetChatId)
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
-		connection.Open();
+		await connection.OpenAsync();
 
 		SqliteCommand command = connection.CreateCommand();
 		command.CommandText = $"SELECT Id, ChatId FROM {USER_LIKES_TABLE} WHERE SoulChatId = $chatId LIMIT 1;";
@@ -156,7 +158,7 @@ public static class Database
 	public static async Task AddLike(long chatId, long targetChatId)
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
-		connection.Open();
+		await connection.OpenAsync();
 
 		SqliteCommand command = connection.CreateCommand();
 		command.CommandText = $"INSERT OR IGNORE INTO {USER_LIKES_TABLE} (ChatId, SoulChatId) VALUES ($chatId, $soulChatId);";
@@ -169,7 +171,7 @@ public static class Database
 	public static async Task RemoveLike(long id)
 	{
 		using SqliteConnection connection = new SqliteConnection(Environment.GetEnvironmentVariable("PATH_DATABASE"));
-		connection.Open();
+		await connection.OpenAsync();
 
 		SqliteCommand command = connection.CreateCommand();
 		command.CommandText = $"DELETE FROM {USER_LIKES_TABLE} WHERE Id = $id;";

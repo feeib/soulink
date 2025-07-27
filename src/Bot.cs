@@ -11,9 +11,9 @@ public static class Bot
 	public static TelegramBotClient? TelegramBot { get; private set; } = null!;
 	private static User _user = null!;
 
-	public static ConcurrentDictionary<long, UserState>? Users { get; private set; } = null!;
+	public static ConcurrentDictionary<long, Soul>? Users { get; private set; } = null!;
 
-	private const int CLEANUP_USERS_TIME = 1;
+	private const int CLEANUP_USERS_TIME = 10;
 
 	public static async Task Run()
 	{
@@ -30,7 +30,7 @@ public static class Bot
 			new BotCommand { Command = "check", Description = "👀глянути вподобайки" },
 		});
 
-		Users = new ConcurrentDictionary<long, UserState>();
+		Users = new ConcurrentDictionary<long, Soul>();
 
 		_user = await TelegramBot.GetMe();
 
@@ -40,18 +40,21 @@ public static class Bot
 		{
 			while (true)
 			{
-				await Task.Delay(TimeSpan.FromMinutes(CLEANUP_USERS_TIME));
+				await Task.Delay(TimeSpan.FromSeconds(CLEANUP_USERS_TIME));
 
 				DateTime now = DateTime.UtcNow;
 				int removedCount = 0;
 				int usersCount = Users.Count;
 
-				foreach (KeyValuePair<long, UserState> pair in Users)
+				foreach (KeyValuePair<long, Soul> pair in Users)
 				{
-					if ((now - pair.Value.LastActive).TotalMinutes > CLEANUP_USERS_TIME)
+					if ((now - pair.Value.State.LastActive).TotalSeconds > CLEANUP_USERS_TIME)
 					{
-						await pair.Value.Remove();
-						removedCount++;
+						await SendMessage(pair.Key, $"Не активний. Почнеш спочатку");
+						if (Users.TryRemove(pair.Key, out _))
+						{
+							removedCount++;
+						}
 					}
 				}
 
@@ -73,7 +76,7 @@ public static class Bot
 			}
 			else if (Users!.ContainsKey(query.Message!.Chat.Id))
 			{
-				await Users[query.Message!.Chat.Id].OnUpdate(query);
+				await Users[query.Message!.Chat.Id].State.OnUpdate(query);
 			}
 		}
 	}
@@ -87,6 +90,7 @@ public static class Bot
 				if (!await Database.IsUserExist(msg.Chat.Id))
 				{
 					await ChangeState(msg, new EditProfile());
+					return;
 				}
 			}
 			else if (msg.Text.Equals("/profile"))
@@ -94,6 +98,7 @@ public static class Bot
 				if (await Database.IsUserExist(msg.Chat.Id))
 				{
 					await ChangeState(msg, new ShowProfile());
+					return;
 				}
 			}
 			else if (msg.Text.Equals("/find"))
@@ -101,6 +106,7 @@ public static class Bot
 				if (await Database.IsUserExist(msg.Chat.Id))
 				{
 					await ChangeState(msg, new ViewProfile());
+					return;
 				}
 			}
 			else if (msg.Text.Equals("/check"))
@@ -108,19 +114,13 @@ public static class Bot
 				if (await Database.IsUserExist(msg.Chat.Id))
 				{
 					await ChangeState(msg, new ViewLikedProfile());
+					return;
 				}
 			}
-			else if (Users!.ContainsKey(msg.Chat.Id))
-			{
-				Users![msg.Chat.Id]?.OnText(msg.Text);
-			}
 		}
-		else if (msg.Photo is not null)
+		if (Users!.ContainsKey(msg.Chat.Id))
 		{
-			if (Users!.ContainsKey(msg.Chat.Id))
-			{
-				Users![msg.Chat.Id]?.OnPhoto(msg.Photo);
-			}
+			Users![msg.Chat.Id]?.State.OnMessage(msg);
 		}
 	}
 
@@ -131,20 +131,70 @@ public static class Bot
 	}
 #pragma warning restore 1998
 
-	private static async Task CreateState(Message msg, UserState state)
+	private static async Task CreateSoul(Message msg, UserState state)
 	{
-		if (Users!.TryAdd(msg.Chat.Id, state))
+		if (Users!.TryAdd(msg.Chat.Id, new Soul() { State = state }))
 		{
+			await state.Create(msg);
+		}
+		else if (Users!.TryGetValue(msg.Chat.Id, out Soul? soul))
+		{
+			soul.State = state;
 			await state.Create(msg);
 		}
 	}
 
 	public static async Task ChangeState(Message msg, UserState newState)
 	{
-		if (Users!.ContainsKey(msg.Chat.Id))
+		if (Users!.TryGetValue(msg.Chat.Id, out Soul? soul) && soul.State is not null)
 		{
-			await Users![msg.Chat.Id].Remove();
+			await soul.State.Remove();
 		}
-		await CreateState(msg, newState);
+		await CreateSoul(msg, newState);
+	}
+
+	public static async Task RemoveReplyKeyboard(Message message)
+	{
+		await TelegramBot!.EditMessageReplyMarkup(
+			chatId: message.Chat.Id,
+			messageId: message.MessageId,
+			replyMarkup: null
+		);
+	}
+
+	public static async Task SendMessage(long chatId, string text, ReplyMarkup? replyMarkup = null)
+	{
+		if (Users!.TryGetValue(chatId, out Soul? soul))
+		{
+			Message msg = soul.LastMessage;
+			if (msg is { ReplyMarkup: { } rm })
+			{
+				await TelegramBot!.EditMessageReplyMarkup(
+					chatId: msg.Chat.Id,
+					messageId: msg.MessageId,
+					replyMarkup: null
+				);
+			}
+
+			soul.LastMessage = await TelegramBot!.SendMessage(chatId, text, replyMarkup: replyMarkup);
+		}
+	}
+
+	public static async Task SendPhoto(long chatId, InputFile photo, string text, ReplyMarkup? replyMarkup = null)
+	{
+		if (Users!.TryGetValue(chatId, out Soul? soul))
+		{
+			Message msg = soul.LastMessage;
+			if (msg is { ReplyMarkup: { } rm })
+			{
+				await TelegramBot!.EditMessageReplyMarkup(
+					chatId: msg.Chat.Id,
+					messageId: msg.MessageId,
+					replyMarkup: null
+				);
+			}
+
+			soul.LastMessage = await TelegramBot!.SendPhoto(chatId, photo, text, replyMarkup: replyMarkup);
+		}
 	}
 }

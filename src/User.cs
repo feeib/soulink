@@ -2,6 +2,12 @@ using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.ReplyMarkups;
 
+public class Soul
+{
+	public UserState State { get; set; }
+	public Message LastMessage { get; set; }
+}
+
 public class UserState
 {
 	public long ChatId { get; private set; }
@@ -21,22 +27,17 @@ public class UserState
 		LastActive = DateTime.UtcNow;
 	}
 
-	public virtual async Task OnText(string text)
+	public virtual async Task OnMessage(Message message)
 	{
-		Console.WriteLine($"OnText: {GetType()}");
-		LastActive = DateTime.UtcNow;
-	}
-
-	public virtual async Task OnPhoto(PhotoSize[] photo)
-	{
-		Console.WriteLine($"OnPhoto: {GetType()}");
+		Console.WriteLine($"OnMessage: {GetType()}");
 		LastActive = DateTime.UtcNow;
 	}
 
 	public virtual async Task Remove()
 	{
-		if (Bot.Users!.TryRemove(ChatId, out _))
+		if (Bot.Users!.TryGetValue(ChatId, out Soul? soul))
 		{
+			soul.State = null!;
 			Console.WriteLine($"Remove: {GetType()}");
 		}
 		else
@@ -57,32 +58,42 @@ public sealed class EditProfile : UserState
 
 		if (string.IsNullOrWhiteSpace(msg.Chat.Username))
 		{
-			await Bot.TelegramBot!.SendMessage(msg.Chat.Id, $"Встанови username на початок...");
+			await Bot.SendMessage(msg.Chat.Id, $"Встанови username в налаштуваннях на початок...");
 			await Remove();
 			return;
 		}
 
-		FormManager = new FormManager([new NameStep(), new AgeStep(), new DescriptionStep(), new PhotoStep()]);
+		FormManager = new FormManager([new CategoryStep(), new NameStep(), new AgeStep(), new DescriptionStep(), new PhotoStep()]);
 		await FormManager.Start(msg.Chat.Id);
 	}
 
-	public override async Task OnText(string text)
+	public override async Task OnUpdate(CallbackQuery query)
 	{
-		await base.OnText(text);
+		await base.OnUpdate(query);
 
-		if (await FormManager.ProcessInput(ChatId, text))
+		if (await FormManager.ProcessInput(ChatId, query))
 		{
 			await Remove();
 		}
 	}
 
-	public override async Task OnPhoto(PhotoSize[] photo)
+	public override async Task OnMessage(Message message)
 	{
-		await base.OnPhoto(photo);
+		await base.OnMessage(message);
 
-		if (await FormManager.ProcessInput(ChatId, photo))
+		if (message.Text is string text)
 		{
-			await Remove();
+			if (await FormManager.ProcessInput(ChatId, text))
+			{
+				await Remove();
+			}
+		}
+		else if (message.Photo is PhotoSize[] photo)
+		{
+			if (await FormManager.ProcessInput(ChatId, photo))
+			{
+				await Remove();
+			}
 		}
 	}
 
@@ -111,8 +122,7 @@ public sealed class ShowProfile : UserState
 
 		if (user.HasValue)
 		{
-			await Bot.TelegramBot!.SendPhoto(msg.Chat.Id, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "📝" });
-		}
+			await Bot.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "📝" }); }
 	}
 
 	public override async Task OnUpdate(CallbackQuery query)
@@ -133,15 +143,14 @@ public sealed class ShowProfile : UserState
 
 public sealed class ViewProfile : UserState
 {
-	private Dictionary<int, long> _savedSouls = new Dictionary<int, long>(); //message id, user db id
-
 	private long _lastUserId = -1;
+	private long _lastUserChatId = -1;
 
 	public override async Task Create(Message msg)
 	{
 		await base.Create(msg);
 
-		Show();
+		await ShowNext();
 	}
 
 	public override async Task OnUpdate(CallbackQuery query)
@@ -150,34 +159,28 @@ public sealed class ViewProfile : UserState
 
 		if (query.Message is null || query.Data is null) return;
 
-		if (!_savedSouls.ContainsKey(query.Message.Id))
-		{
-			await Bot.TelegramBot!.AnswerCallbackQuery(query.Id, "Та анкета вигасла.");
-			return;
-		}
-
 		if (query.Data.Equals("➡️"))
 		{
-			Show();
+			await ShowNext();
 		}
 		else if (query.Data.Equals("👍"))
 		{
-			await Database.AddLike(query.Message.Chat.Id, _savedSouls[query.Message.Id]);
-			await Bot.TelegramBot!.SendMessage(_savedSouls[query.Message.Id], "Ти дістав вподобайку!", replyMarkup: new InlineKeyboardButton[] { "📤" });
+			await Database.AddLike(ChatId, _lastUserChatId);
+			await Bot.SendMessage(_lastUserChatId, "Ти дістав вподобайку!", replyMarkup: new InlineKeyboardButton[] { "📤" });
+			await ShowNext();
 		}
 	}
 
-	private async void Show()
+	private async Task ShowNext()
 	{
 		(string id, string chatId, string name, string age, string description, string photoId)? user = await Database.GetUserByOrderAsc(_lastUserId);
 
 		if (user.HasValue)
 		{
 			_lastUserId = long.Parse(user.Value.id);
+			_lastUserChatId = long.Parse(user.Value.chatId);
 
-			Message msg = await Bot.TelegramBot!.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "➡️", "👍" });
-
-			_savedSouls.Add(msg.Id, long.Parse(user.Value.chatId));
+			await Bot.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "➡️", "👍" });
 		}
 	}
 }
@@ -209,7 +212,7 @@ public sealed class ViewLikedProfile : UserState
 		{
 			ChatFullInfo chat = await Bot.TelegramBot!.GetChat(_lastChatId);
 
-			await Bot.TelegramBot!.SendMessage(ChatId, $"Пиши: @{chat.Username} Удачі!");
+			await Bot.SendMessage(ChatId, $"Пиши: @{chat.Username} Удачі!");
 			await Database.RemoveLike(_lastLikeId);
 			await Remove();
 		}
@@ -228,12 +231,12 @@ public sealed class ViewLikedProfile : UserState
 
 			if (user.HasValue)
 			{
-				await Bot.TelegramBot!.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "\U0001F44E", "\U0001F44D" });
+				await Bot.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "\U0001F44E", "\U0001F44D" });
 			}
 		}
 		else
 		{
-			await Bot.TelegramBot!.SendMessage(ChatId, "Пусто тут, більше нічого немає");
+			await Bot.SendMessage(ChatId, "Пусто тут, більше нічого немає");
 			await Remove();
 		}
 	}

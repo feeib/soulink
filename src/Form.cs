@@ -1,11 +1,16 @@
 using Telegram.Bot;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.ReplyMarkups;
 
 public abstract class FormStep
 {
 	public abstract string Question { get; }
 
-	public abstract bool Validate(object obj, out string? error);
+	public virtual async Task ShowQuestion(long chatId)
+	{
+		await Bot.SendMessage(chatId, Question);
+	}
+	public abstract Task<(bool, string?)> Validate(object obj);
 	public abstract void SaveAnswer(FormContext formContext, object obj);
 }
 
@@ -43,27 +48,29 @@ public class FormManager
 	{
 		_start = true;
 
-		await Bot.TelegramBot!.SendMessage(chatId, CurrentStep!.Question);
+		await CurrentStep!.ShowQuestion(chatId);
 	}
 
 	public async Task<bool> ProcessInput(long chatId, object input)
 	{
 		if (!_start) return false;
 
-		if (CurrentStep!.Validate(input, out string? error))
+		(bool validate, string? error) result = await CurrentStep!.Validate(input);
+
+		if (result.validate)
 		{
 			CurrentStep.SaveAnswer(FormContext, input);
 
 			_currentIndex++;
 
 			if (CurrentStep is null) return true;
-			await Bot.TelegramBot!.SendMessage(chatId, CurrentStep.Question);
+			await CurrentStep!.ShowQuestion(chatId);
 		}
 		else
 		{
-			await Bot.TelegramBot!.SendMessage(chatId, error!);
+			if (result.error is not null)
+				await Bot.SendMessage(chatId, result.error);
 		}
-
 		return false;
 	}
 }
@@ -72,17 +79,16 @@ public class NameStep : FormStep
 {
 	public override string Question => "Як тебе звати?";
 
-	public override bool Validate(object obj, out string? error)
+	public override Task<(bool, string?)> Validate(object obj)
 	{
-		if (obj is string text)
+		if (obj is string text && !string.IsNullOrWhiteSpace(text))
 		{
-			error = string.IsNullOrWhiteSpace(text) ? "Ім'я не може бути порожнім." : null;
+			return Task.FromResult<(bool, string?)>((true, null));
 		}
 		else
 		{
-			error = "Ім'я має бути текстом.";
+			return Task.FromResult<(bool, string?)>((false, "Ім'я має бути текстом i не може бути порожнім."));
 		}
-		return error is null;
 	}
 
 	public override void SaveAnswer(FormContext context, object obj)
@@ -95,17 +101,15 @@ public class AgeStep : FormStep
 {
 	public override string Question => "Скільки тобі років?";
 
-	public override bool Validate(object obj, out string? error)
+	public override Task<(bool, string?)> Validate(object obj)
 	{
-		if (obj is string text && ushort.TryParse(text, out ushort age) && (age < 80 && age > 6))
+		if (obj is string text && ushort.TryParse(text, out ushort age) && (age <= 80 && age >= 6))
 		{
-			error = null;
-			return true;
+			return Task.FromResult<(bool, string?)>((true, null));
 		}
 		else
 		{
-			error = "Вік має бути числом, 6 - 80.";
-			return false;
+			return Task.FromResult<(bool, string?)>((false, "Вік має бути числом, 6 - 80."));
 		}
 	}
 
@@ -119,17 +123,16 @@ public class DescriptionStep : FormStep
 {
 	public override string Question => "Напиши щось про себе.";
 
-	public override bool Validate(object obj, out string? error)
+	public override Task<(bool, string?)> Validate(object obj)
 	{
-		if (obj is string text)
+		if (obj is string text && !string.IsNullOrWhiteSpace(text) && text.Length > 100)
 		{
-			error = string.IsNullOrWhiteSpace(text) || text.Length < 100 ? "Опис не може бути пустим, мінімум 100 символів!" : null;
+			return Task.FromResult<(bool, string?)>((true, null));
 		}
 		else
 		{
-			error = "Має бути текст.";
+			return Task.FromResult<(bool, string?)>((false, "Опис не може бути пустим, мінімум 100 символів!"));
 		}
-		return error is null;
 	}
 
 	public override void SaveAnswer(FormContext context, object obj)
@@ -142,22 +145,92 @@ public class PhotoStep : FormStep
 {
 	public override string Question => "Додай фото.";
 
-	public override bool Validate(object obj, out string? error)
+	public override Task<(bool, string?)> Validate(object obj)
 	{
 		if (obj is PhotoSize[] photo)
 		{
-			error = null;
-			return true;
+			return Task.FromResult<(bool, string?)>((true, null));
 		}
 		else
 		{
-			error = "Має бути фото.";
-			return false;
+			return Task.FromResult<(bool, string?)>((false, "Має бути фото."));
 		}
 	}
 
 	public override void SaveAnswer(FormContext context, object obj)
 	{
 		context.Set("photoId", ((PhotoSize[])obj)[^1].FileId);
+	}
+}
+
+public class CategoryStep : FormStep
+{
+	public override string Question => "Вибери своє зацікавлення.\n1. Програмування\n2. Малювання\n3. Музика";
+
+	private string[] _categories = new[] { "IT", "ART", "MUSIC" };
+	private List<string> _selectedCategories = new List<string>();
+
+	public InlineKeyboardMarkup BuildKeyboard()
+	{
+		List<List<InlineKeyboardButton>> buttons = new List<List<InlineKeyboardButton>>() { new(), new() };
+
+		foreach (string category in _categories)
+		{
+			bool selected = _selectedCategories.Contains(category);
+			string emoji = selected ? "🟢" : "🔴";
+
+			var button = InlineKeyboardButton.WithCallbackData($"{emoji} {category}", $"toggle:{category}");
+			buttons[0].Add(button);
+		}
+
+		var doneButton = InlineKeyboardButton.WithCallbackData("✅ Готово", "done");
+		buttons[1].Add(doneButton);
+
+		return new InlineKeyboardMarkup(buttons);
+	}
+
+	public override async Task ShowQuestion(long chatId)
+	{
+		await Bot.SendMessage(chatId, Question, replyMarkup: BuildKeyboard());
+	}
+
+	public override async Task<(bool, string?)> Validate(object obj)
+	{
+		if (obj is CallbackQuery query)
+		{
+			if (query is { Data: { } data, Message: { } msg })
+			{
+				if (data.StartsWith("toggle:"))
+				{
+					var tag = data.Split(':')[1];
+
+					if (_selectedCategories.Contains(tag))
+						_selectedCategories.Remove(tag);
+					else
+						_selectedCategories.Add(tag);
+
+					await Bot.TelegramBot!.EditMessageReplyMarkup(
+						chatId: msg.Chat.Id,
+						messageId: msg.MessageId,
+						replyMarkup: BuildKeyboard()
+					);
+					return (false, null);
+				}
+				else if (data.Equals("done"))
+				{
+					return (true, null);
+				}
+			}
+			return (false, "Ну це буде пізда, якщо це з`явиться!!!");
+		}
+		else
+		{
+			return (false, "Має бути текст.");
+		}
+	}
+
+	public override void SaveAnswer(FormContext context, object obj)
+	{
+		context.Set("category", _selectedCategories);
 	}
 }
