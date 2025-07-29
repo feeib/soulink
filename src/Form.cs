@@ -165,21 +165,21 @@ public class PhotoStep : FormStep
 
 public class CategoryStep : FormStep
 {
-	public override string Question => "Вибери своє зацікавлення.\n1. Програмування\n2. Малювання\n3. Музика";
+	public override string Question => "Вибери свої зацікавлення.";
 
-	private string[] _categories = new[] { "IT", "ART", "MUSIC" };
-	private List<string> _selectedCategories = new List<string>();
+	public List<(long, string)> Categories = null!;
+	private List<long> _selectedCategories = new List<long>();
 
-	public InlineKeyboardMarkup BuildKeyboard()
+	private InlineKeyboardMarkup BuildKeyboard()
 	{
 		List<List<InlineKeyboardButton>> buttons = new List<List<InlineKeyboardButton>>() { new(), new() };
 
-		foreach (string category in _categories)
+		foreach ((long, string) category in Categories)
 		{
-			bool selected = _selectedCategories.Contains(category);
+			bool selected = _selectedCategories.Contains(category.Item1);
 			string emoji = selected ? "🟢" : "🔴";
 
-			var button = InlineKeyboardButton.WithCallbackData($"{emoji} {category}", $"toggle:{category}");
+			var button = InlineKeyboardButton.WithCallbackData($"{emoji} {category.Item2}", $"toggle:{category.Item1}");
 			buttons[0].Add(button);
 		}
 
@@ -202,7 +202,7 @@ public class CategoryStep : FormStep
 			{
 				if (data.StartsWith("toggle:"))
 				{
-					var tag = data.Split(':')[1];
+					long tag = long.Parse(data.Split(':')[1]);
 
 					if (_selectedCategories.Contains(tag))
 						_selectedCategories.Remove(tag);
@@ -231,6 +231,6 @@ public class CategoryStep : FormStep
 
 	public override void SaveAnswer(FormContext context, object obj)
 	{
-		context.Set("category", _selectedCategories);
+		context.Set("categories", _selectedCategories);
 	}
 }

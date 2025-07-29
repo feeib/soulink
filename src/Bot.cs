@@ -13,11 +13,14 @@ public static class Bot
 
 	public static ConcurrentDictionary<long, Soul>? Users { get; private set; } = null!;
 
-	private const int CLEANUP_USERS_TIME = 10;
+	private const int CLEANUP_USERS_TIME = 100;
 
 	public static async Task Run()
 	{
+
 		using CancellationTokenSource cts = new CancellationTokenSource();
+
+		Users = new ConcurrentDictionary<long, Soul>();
 
 		TelegramBot = new TelegramBotClient(Environment.GetEnvironmentVariable("BOT_TOKEN")!, cancellationToken: cts.Token);
 		TelegramBot.OnUpdate += OnUpdate;
@@ -29,8 +32,6 @@ public static class Bot
 			new BotCommand { Command = "profile", Description = "👤твоя \"крінжова\" анкета" },
 			new BotCommand { Command = "check", Description = "👀глянути вподобайки" },
 		});
-
-		Users = new ConcurrentDictionary<long, Soul>();
 
 		_user = await TelegramBot.GetMe();
 
@@ -51,6 +52,7 @@ public static class Bot
 					if ((now - pair.Value.State.LastActive).TotalSeconds > CLEANUP_USERS_TIME)
 					{
 						await SendMessage(pair.Key, $"Не активний. Почнеш спочатку");
+						await Task.Delay(100);
 						if (Users.TryRemove(pair.Key, out _))
 						{
 							removedCount++;
@@ -120,7 +122,7 @@ public static class Bot
 		}
 		if (Users!.ContainsKey(msg.Chat.Id))
 		{
-			Users![msg.Chat.Id]?.State.OnMessage(msg);
+			Users![msg.Chat.Id]?.State?.OnMessage(msg);
 		}
 	}
 

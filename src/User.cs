@@ -4,8 +4,8 @@ using Telegram.Bot.Types.ReplyMarkups;
 
 public class Soul
 {
-	public UserState State { get; set; }
-	public Message LastMessage { get; set; }
+	public UserState State { get; set; } = null!;
+	public Message LastMessage { get; set; } = null!;
 }
 
 public class UserState
@@ -16,21 +16,21 @@ public class UserState
 #pragma warning disable CS1998
 	public virtual async Task Create(Message msg)
 	{
-		Console.WriteLine($"Create: {GetType()}");
 		ChatId = msg.Chat.Id;
 		LastActive = DateTime.UtcNow;
+		Console.WriteLine($"[{LastActive}] {ChatId} Create: {GetType()}");
 	}
 
 	public virtual async Task OnUpdate(CallbackQuery query)
 	{
-		Console.WriteLine($"OnUpdate: {GetType()}");
 		LastActive = DateTime.UtcNow;
+		Console.WriteLine($"[{LastActive}] {ChatId} OnUpdate: {GetType()}");
 	}
 
 	public virtual async Task OnMessage(Message message)
 	{
-		Console.WriteLine($"OnMessage: {GetType()}");
 		LastActive = DateTime.UtcNow;
+		Console.WriteLine($"[{LastActive}] {ChatId} OnMessage: {GetType()}");
 	}
 
 	public virtual async Task Remove()
@@ -38,11 +38,11 @@ public class UserState
 		if (Bot.Users!.TryGetValue(ChatId, out Soul? soul))
 		{
 			soul.State = null!;
-			Console.WriteLine($"Remove: {GetType()}");
+			Console.WriteLine($"[{LastActive}] {ChatId} Remove: {GetType()}");
 		}
 		else
 		{
-			Console.WriteLine($"No remove: {GetType()}");
+			Console.WriteLine($"[{LastActive}] {ChatId} No remove: {GetType()}");
 		}
 	}
 #pragma warning restore CS1998
@@ -63,7 +63,14 @@ public sealed class EditProfile : UserState
 			return;
 		}
 
-		FormManager = new FormManager([new CategoryStep(), new NameStep(), new AgeStep(), new DescriptionStep(), new PhotoStep()]);
+		FormManager = new FormManager([
+			new CategoryStep() { Categories = await Database.GetCategories()},
+			new NameStep(),
+			new AgeStep(),
+			new DescriptionStep(),
+			new PhotoStep()
+			]);
+
 		await FormManager.Start(msg.Chat.Id);
 	}
 
@@ -107,8 +114,15 @@ public sealed class EditProfile : UserState
 		string age = FormManager.FormContext.Get<string>("age");
 		string description = FormManager.FormContext.Get<string>("description");
 		string photoId = FormManager.FormContext.Get<string>("photoId");
+		List<long> categories = FormManager.FormContext.Get<List<long>>("categories");
 
 		await Database.AddOrUpdateUser((ChatId, name, age, description, photoId));
+		await Database.RemoveUserCategoryByChatId(ChatId);
+
+		foreach (int category in categories)
+		{
+			await Database.AddUserCategoryByChatId(ChatId, category);
+		}
 	}
 }
 
@@ -118,11 +132,13 @@ public sealed class ShowProfile : UserState
 	{
 		await base.Create(msg);
 
-		(string name, string age, string description, string photoId)? user = await Database.GetUserByChatId(msg.Chat.Id);
+		(string name, string age, string description, string photoId)? user = await Database.GetUserByChatId(ChatId);
+		string categories = string.Join(", ", await Database.GetUserCategoryByChatId(ChatId));
 
 		if (user.HasValue)
 		{
-			await Bot.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "📝" }); }
+			await Bot.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}\n{user.Value.description}\n🏷️: {categories}", replyMarkup: new InlineKeyboardButton[] { "📝" });
+		}
 	}
 
 	public override async Task OnUpdate(CallbackQuery query)
@@ -173,14 +189,19 @@ public sealed class ViewProfile : UserState
 
 	private async Task ShowNext()
 	{
-		(string id, string chatId, string name, string age, string description, string photoId)? user = await Database.GetUserByOrderAsc(_lastUserId);
+		(string id, string chatId, string name, string age, string description, string photoId)? user = await Database.GetUserByOrderAsc(ChatId, _lastUserId);
 
 		if (user.HasValue)
 		{
 			_lastUserId = long.Parse(user.Value.id);
 			_lastUserChatId = long.Parse(user.Value.chatId);
+			string categories = string.Join(", ", await Database.GetUserCategoryByChatId(_lastUserChatId));
 
-			await Bot.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}, {user.Value.description}", replyMarkup: new InlineKeyboardButton[] { "➡️", "👍" });
+			await Bot.SendPhoto(ChatId, user.Value.photoId, $"{user.Value.name}, {user.Value.age}\n{user.Value.description}\n🏷️: {categories}", replyMarkup: new InlineKeyboardButton[] { "➡️", "👍" });
+		}
+		else
+		{
+			await Bot.SendMessage(ChatId, "Пусто.");
 		}
 	}
 }
